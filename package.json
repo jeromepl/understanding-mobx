@@ -11,7 +11,5 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@types/uuid": "^3.4.3",
-    "uuid": "^3.1.0"
   }
 }

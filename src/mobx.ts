@@ -1,95 +1,136 @@
-import { v4 as uuid } from "uuid";
-
-
+// A Derivation can be either a Reaction or a Computed block
 type Derivation = {
-    dependencies: Set<string>, // Set (ES2015) of observable UUIDs
-    fn: () => void // The function to run when one of the dependencies has changed
-}
+    fn: () => void,
+    // dependencies: Set<Observable> TODO Observable.derivations are NEVER removed, only more are added.
+};
+type Observable = {
+    val: any,
+    derivations: Set<Derivation>
+};
 
-const reactions: Derivation[] = [];
 let inTransaction: boolean = false;
-let changesDuringTransaction: string[] = [];
-let evaluatingDerivation: boolean = false;
-let derivationDependencies: string[] = []; // Explicit access to the top of the 'derivationDependenciesStack'
-let derivationDependenciesStack: (string[])[] = [derivationDependencies];
+let derivationsDuringTransaction = new Set<Derivation>();
+// let derivationDependenciesStack: (string[])[] = [derivationDependencies];
 
-// For this demo, only support @observable someProp. No support for Arrays and Maps
-export function observable(object: any, key: string): any {
-    let val: any;
-    const observableUUID: string = uuid() + key;
+// If 'derivationEvaluated' is not null, a derivation is currently being evaluated
+let derivationEvaluated: Derivation | null;
+
+/**
+ * Decorator to indicate that a class property is an Observable, thus triggering any Computed values or Reactions
+ * whenever the value of this Observable changes.
+ * For this demo, this only supports `@observable someProp`. No support for Arrays and Maps.
+ */
+export function observable(obj: any, prop: string): any {
+    const observable = {
+        derivations: new Set<Derivation>(),
+        val: undefined
+    };
     return {
         enumerable: false,
         configurable: true,
-        get: function() {
-            if (evaluatingDerivation) {
-                derivationDependencies.push(observableUUID);
+        get: () => {
+            if (derivationEvaluated) {
+                observable.derivations.add(derivationEvaluated);
             }
-            return val;
+            return observable.val;
         },
-        set: function(newVal: any) {
-            const oldVal = val;
-            val = newVal;
-            if (val !== oldVal) { // Something changed, trigger actions
-                console.log(`${key} set to ${val}`);
-                triggerReactions(observableUUID);
+        set: (newVal: any) => {
+            const oldVal = observable.val;
+            observable.val = newVal;
+            if (observable.val !== oldVal) { // Something changed, trigger actions
+                triggerDerivations(observable.derivations);
             }
         }
     }
 }
 
-function triggerReactions(observableUUID: string | string[]) {
+// TODO run this in 2 waves. 1 - Send 'stale' notifications to all derivations. The derivations will count the number of stale notifications they get.
+// 2 - Send 'ready' notifications when the value was updated (start with Observables) along with whether the value was changed or not.
+// Once a derivation receives as many 'ready' as it received 'stale', it recomputes (if at least one value has changed) and then itself sends a 'ready' notification
+function triggerDerivations(derivations: Set<Derivation>) {
     if (inTransaction) {
-        changesDuringTransaction = changesDuringTransaction.concat(observableUUID);
+        addSetToSet(derivations, derivationsDuringTransaction);
         return;
     }
 
-    for (let reaction of reactions) { // This is where a bottleneck could be. I believe that in MobX, observables store what reactions they affect for better performance
-        if (setContainsOneOf(reaction.dependencies, observableUUID)) {
-            evaluateDerivation(reaction); // Only run if the reaction has one of the changed observables as dependency
-        }
+    for (let derivation of derivations) {
+        // A derivation is always re-evaluated when it is triggered in order to update its Observable dependencies
+        evaluateDerivation(derivation);
     }
 }
 
 function evaluateDerivation(derivation: Derivation) {
-    evaluatingDerivation = true;
-    derivation.fn(); // Run the reaction, while keeping track of what is accessed
-    evaluatingDerivation = false;
+    derivationEvaluated = derivation;
+    derivation.fn(); // Run the derivation, while keeping track of what is accessed
+    derivationEvaluated = null;
 
-    derivation.dependencies = new Set(derivationDependencies);
-    derivationDependencies = [];
+    // derivation.dependencies = new Set(derivationDependencies);
+    // derivationDependencies = [];
 }
 
-function setContainsOneOf<T>(set: Set<T>, thingsToFind: T|T[]): boolean {
-    if (!(thingsToFind instanceof Array)) thingsToFind = [thingsToFind];
+/**
+ * The `computed` decorator is really only useful for performance improvements. When using it, the computed value can be cached and
+ * only re-computed whenever an observable on which this is dependent changes value. This thus assumes the computed methods are pure.
+ * Computed values act as both observables and derivations since they are updated by observables and update
+ * In MobX, the value is also garbaged collected if there are no listeners.
+ */
+export function computed<T>(obj: any, prop: string, descriptor: TypedPropertyDescriptor<T>): any {
+    if (!descriptor.get) return descriptor;
 
-    for (let thingToFind of thingsToFind) if (set.has(thingToFind)) return true;
-    return false;
-}
-
-export function computed(object: any, key: string) {
-    return {
-        get: undefined
+    const originalGetter = descriptor.get.bind(obj); // The original getter lives in descriptor.get
+    const observable: Observable = {
+        val: undefined,
+        derivations: new Set<Derivation>()
+    }
+    const recompute = () => {
+        let oldVal = observable.val;
+        if (descriptor.get) observable.val = originalGetter();
+        if (observable.val !== oldVal) triggerDerivations(observable.derivations);
     };
-    // TODO
-    // Gonna run into issues with current architecture when trying to find the reaction dependencies of a @computed function during the evaluation of a Reaction
-    // Gonna need a stack of dependency arrays to solve that
+    const derivation: Derivation = {
+        fn: recompute
+    };
+
+    evaluateDerivation(derivation); // Initialize
+
+    return {
+        enumerable: false,
+        configurable: true,
+        get: () => {
+            if (derivationEvaluated) {
+                observable.derivations.add(derivationEvaluated);
+            }
+            return observable.val;
+        }
+    };
 }
 
+/**
+ * Runs the given method 'fn' while keeping track of all affected Reactions.
+ * All these Reactions are then triggered once after 'fn' has completed.
+ */
 export function transaction(fn: () => void) {
     inTransaction = true;
     fn();
     inTransaction = false;
 
-    triggerReactions(changesDuringTransaction);
-    changesDuringTransaction = [];
+    triggerDerivations(derivationsDuringTransaction);
+    derivationsDuringTransaction = new Set<Derivation>();
 }
 
+/**
+ * Runs the given method whenever an Observable or a Computed value used inside changes value.
+ * Evaluates the Observable dependencies at runtime, thus only running when absolutely necessary.
+ */
 export function autorun(fn: () => void) {
-    console.log("Setup Autorun");
-    const reaction: Derivation = {
-        dependencies: new Set(),
+    const reaction = {
+        // dependencies: new Set<Observable>(),
         fn
     };
     evaluateDerivation(reaction); // Run it initially. This also allows to figure out the (initial) dependencies of that reaction
-    reactions.push(reaction);
+}
+
+/** Add the elements in 'set1' to 'set2' */
+function addSetToSet<T>(set1: Set<T>, set2: Set<T>): void {
+    for (let elementToAdd of set1) set2.add(elementToAdd);
 }
