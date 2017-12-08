@@ -1,5 +1,5 @@
 {
-  "name": "mobx-poc",
+  "name": "understanding-mobx",
   "version": "1.0.0",
   "description": "Small demo of the inner workings of MobX",
   "main": "mobx.js",
