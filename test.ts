@@ -30,8 +30,8 @@ testObj.test2 = 42; // Should trigger autorun
 // Test transactions
 console.log("Running transaction");
 transaction(() => { // Should trigger autorun only once after the whole function has executed
-    console.log("testObj.test1 = 'Thing';");
-    testObj.test1 = 'Thing';
-    console.log("testObj.test1 = 'Stuff';");
-    testObj.test1 = 'Stuff';
+    console.log("testObj.test2 = 90;");
+    testObj.test2 = 90;
+    console.log("testObj.test2 = 100;");
+    testObj.test2 = 100;
 });

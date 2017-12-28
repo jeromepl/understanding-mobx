@@ -1,19 +1,11 @@
-// A Derivation can be either a Reaction or a Computed block
-type Derivation = {
-    fn: () => void,
-    // dependencies: Set<Observable> TODO Observable.derivations are NEVER removed, only more are added.
-};
-type Observable = {
-    val: any,
-    derivations: Set<Derivation>
-};
+import Derivation from './Derivation';
+import Observable from './Observable';
+import Computed from './Computed';
+
 
 let inTransaction: boolean = false;
 let derivationsDuringTransaction = new Set<Derivation>();
 // let derivationDependenciesStack: (string[])[] = [derivationDependencies];
-
-// If 'derivationEvaluated' is not null, a derivation is currently being evaluated
-let derivationEvaluated: Derivation | null;
 
 /**
  * Decorator to indicate that a class property is an Observable, thus triggering any Computed values or Reactions
@@ -29,8 +21,8 @@ export function observable(obj: any, prop: string): any {
         enumerable: false,
         configurable: true,
         get: () => {
-            if (derivationEvaluated) {
-                observable.derivations.add(derivationEvaluated);
+            if (Derivation.derivationEvaluated) {
+                observable.derivations.add(Derivation.derivationEvaluated);
             }
             return observable.val;
         },
@@ -44,35 +36,33 @@ export function observable(obj: any, prop: string): any {
     }
 }
 
-// TODO run this in 2 waves. 1 - Send 'stale' notifications to all derivations. The derivations will count the number of stale notifications they get.
-// 2 - Send 'ready' notifications when the value was updated (start with Observables) along with whether the value was changed or not.
-// Once a derivation receives as many 'ready' as it received 'stale', it recomputes (if at least one value has changed) and then itself sends a 'ready' notification
+/**
+ * Triggering derivations after an observable changes is done in two stages.
+ * 1 - Send a 'stale' notification that propagates all the way through the dependency tree.
+ * Each Derivation keeps track of the number of 'stale' notification it receives, which tells it how many dependencies it has to wait on.
+ * 2 - Send a 'ready' notification to the Derivations directly affected (without going through computed values) by the original obsrvable change.
+ * Once a Derivation has received as many 'ready' notifications as it has received 'stale' notifications (and that at least one of their values changed),
+ * it in turn sends a 'ready' notification to its direct dependents, along with whether its value has changed.
+ * run this in 2 waves. 1 - Send 'stale' notifications to all derivations. The derivations will count the number of stale notifications they get.
+*/
 function triggerDerivations(derivations: Set<Derivation>) {
     if (inTransaction) {
-        addSetToSet(derivations, derivationsDuringTransaction);
+        for (let derivation of derivations) derivationsDuringTransaction.add(derivation);
         return;
     }
 
-    for (let derivation of derivations) {
-        // A derivation is always re-evaluated when it is triggered in order to update its Observable dependencies
-        evaluateDerivation(derivation);
-    }
-}
-
-function evaluateDerivation(derivation: Derivation) {
-    derivationEvaluated = derivation;
-    derivation.fn(); // Run the derivation, while keeping track of what is accessed
-    derivationEvaluated = null;
-
-    // derivation.dependencies = new Set(derivationDependencies);
-    // derivationDependencies = [];
+    // Mark any accessed derivation as stale
+    for (let derivation of derivations) derivation.markStale();
+    // Then send 'ready' notifications to all derivations once a depencency has finished evaluating
+    // A derivation is always re-evaluated when it is triggered in order to update its Observable dependencies
+    for (let derivation of derivations) derivation.sendReady(true);
 }
 
 /**
- * The `computed` decorator is really only useful for performance improvements. When using it, the computed value can be cached and
- * only re-computed whenever an observable on which this is dependent changes value. This thus assumes the computed methods are pure.
- * Computed values act as both observables and derivations since they are updated by observables and update
- * In MobX, the value is also garbaged collected if there are no listeners.
+ * A computed value is cached and only re-computed whenever an observable on which this is dependent changes value.
+ * This thus assumes that computed methods are pure. Computed values act as both observables and derivations
+ * since they are updated by observables and update the derivations that depend on this.
+ * In MobX, the value is also garbage collected if there are no listeners.
  */
 export function computed<T>(obj: any, prop: string, descriptor: TypedPropertyDescriptor<T>): any {
     if (!descriptor.get) return descriptor;
@@ -81,24 +71,18 @@ export function computed<T>(obj: any, prop: string, descriptor: TypedPropertyDes
     const observable: Observable = {
         val: undefined,
         derivations: new Set<Derivation>()
-    }
-    const recompute = () => {
-        let oldVal = observable.val;
-        if (descriptor.get) observable.val = originalGetter();
-        if (observable.val !== oldVal) triggerDerivations(observable.derivations);
-    };
-    const derivation: Derivation = {
-        fn: recompute
     };
 
-    evaluateDerivation(derivation); // Initialize
+    const computed = new Computed(observable, originalGetter);
+
+    computed.evaluate(); // Initialize
 
     return {
         enumerable: false,
         configurable: true,
         get: () => {
-            if (derivationEvaluated) {
-                observable.derivations.add(derivationEvaluated);
+            if (Derivation.derivationEvaluated) {
+                observable.derivations.add(Derivation.derivationEvaluated);
             }
             return observable.val;
         }
@@ -123,14 +107,6 @@ export function transaction(fn: () => void) {
  * Evaluates the Observable dependencies at runtime, thus only running when absolutely necessary.
  */
 export function autorun(fn: () => void) {
-    const reaction = {
-        // dependencies: new Set<Observable>(),
-        fn
-    };
-    evaluateDerivation(reaction); // Run it initially. This also allows to figure out the (initial) dependencies of that reaction
-}
-
-/** Add the elements in 'set1' to 'set2' */
-function addSetToSet<T>(set1: Set<T>, set2: Set<T>): void {
-    for (let elementToAdd of set1) set2.add(elementToAdd);
+    const reaction = new Derivation(fn);
+    reaction.evaluate(); // Run it initially. This also allows to figure out the (initial) dependencies of that reaction
 }
