@@ -1,6 +1,4 @@
-import Derivation from './Derivation';
-import Observable from './Observable';
-import Computed from './Computed';
+import { Observable, Derivation, Computed } from './objects';
 
 
 let inTransaction: boolean = false;
