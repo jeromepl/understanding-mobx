@@ -24,7 +24,9 @@ export class Derivation {
 
     constructor(protected fn: () => void) {}
 
-    // dependencies: Set<Observable> TODO Observable.derivations are NEVER removed, only more are added.
+    private dependencies = new Set<Observable>(); // Keep track of which observables are accessed when this derivation is run
+    // This is used to then update the list of affected derivations in each Observable
+    public newDependencies = new Set<Observable>();
 
     /**
      * Mark this derivation as stale. It counts the number of stale notifications it gets in order to
@@ -47,6 +49,25 @@ export class Derivation {
         Derivation.derivationEvaluated = this;
         this.fn();
         Derivation.derivationEvaluated = null;
+
+        // Run a diff on the dependencies in order to accordingly update the list of affected derivations in observables
+        this.updateObservablesListOfDerivations();
+    }
+
+    private updateObservablesListOfDerivations() {
+        for (let observable of this.newDependencies) {
+            if (!this.dependencies.has(observable)) {
+                observable.derivations.add(this);
+            } else {
+                this.dependencies.delete(observable); // Remove observables that were already in the dependencies
+            }
+        }
+        for (let observable of this.dependencies) { // The leftover observables need to be removed
+            observable.derivations.delete(this);
+        }
+
+        this.dependencies = this.newDependencies; // Update the dependencies
+        this.newDependencies = new Set<Observable>();
     }
 }
 

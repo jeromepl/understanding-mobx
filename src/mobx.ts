@@ -3,7 +3,6 @@ import { Observable, Derivation, Computed } from './objects';
 
 let inTransaction: boolean = false;
 let derivationsDuringTransaction = new Set<Derivation>();
-// let derivationDependenciesStack: (string[])[] = [derivationDependencies];
 
 /**
  * Decorator to indicate that a class property is an Observable, thus triggering any Computed values or Reactions
@@ -20,7 +19,7 @@ export function observable(obj: any, prop: string): any {
         configurable: true,
         get: () => {
             if (Derivation.derivationEvaluated) {
-                observable.derivations.add(Derivation.derivationEvaluated);
+                Derivation.derivationEvaluated.newDependencies.add(observable);
             }
             return observable.val;
         },
@@ -80,7 +79,7 @@ export function computed<T>(obj: any, prop: string, descriptor: TypedPropertyDes
         configurable: true,
         get: () => {
             if (Derivation.derivationEvaluated) {
-                observable.derivations.add(Derivation.derivationEvaluated);
+                Derivation.derivationEvaluated.newDependencies.add(observable);
             }
             return observable.val;
         }

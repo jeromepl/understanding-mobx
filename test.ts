@@ -35,3 +35,8 @@ transaction(() => { // Should trigger autorun only once after the whole function
     console.log("testObj.test2 = 100;");
     testObj.test2 = 100;
 });
+
+console.log("testObj.test1 = 'World';");
+testObj.test1 = 'World'; // Should trigger autorun
+console.log("testObj.test2 = 0;");
+testObj.test2 = 0; // Should not trigger autorun since `test1` should no longer be a dependency
